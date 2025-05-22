@@ -41,13 +41,27 @@ type customTransport struct {
 
 func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
     if strings.Contains(req.URL.String(), t.originalURL) {
-        // 替换请求 URL 中的 API 域名
-        newURLStr := strings.Replace(
-            req.URL.String(), 
-            t.originalURL, 
-            t.proxyURL, 
-            1,
-        )
+        originalURLStr := req.URL.String()
+        var newURLStr string
+
+        // 检查代理URL的末尾是否有斜杠
+        proxyBase := t.proxyURL
+        if strings.HasSuffix(proxyBase, "/") {
+            proxyBase = proxyBase[:len(proxyBase)-1]
+        }
+        
+        // 构建相对路径
+        apiPath := strings.TrimPrefix(originalURLStr, t.originalURL)
+        
+        // 构建两种可能的代理URL格式
+        // 格式1：直接拼接 - http://proxy/relative/path
+        directProxyURL := proxyBase + apiPath
+        
+        // 格式2：查询参数传递 - http://proxy?url=originalURL
+        queryProxyURL := proxyBase + "?url=" + url.QueryEscape(originalURLStr)
+        
+        // 首先尝试格式1
+        newURLStr = directProxyURL
         
         newURL, err := url.Parse(newURLStr)
         if err != nil {
@@ -59,9 +73,27 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
         *newReq = *req
         newReq.URL = newURL
         
+        // 添加可能需要的额外头信息
+        newReq.Header.Set("X-Original-URL", originalURLStr)
+        newReq.Header.Set("X-Proxy-Agent", "RSS2TG/1.0")
+        
         log.Printf("代理请求: %s -> %s", req.URL, newReq.URL)
         
-        return t.base.RoundTrip(newReq)
+        // 发送请求
+        resp, err := t.base.RoundTrip(newReq)
+        
+        // 如果格式1失败，尝试格式2
+        if err != nil && (strings.Contains(err.Error(), "connection reset by peer") || 
+                         strings.Contains(err.Error(), "refused") ||
+                         resp != nil && resp.StatusCode >= 400) {
+            log.Printf("直接代理请求失败，尝试查询参数格式: %v", err)
+            newURL, _ := url.Parse(queryProxyURL)
+            newReq.URL = newURL
+            log.Printf("改用格式: %s", newReq.URL)
+            return t.base.RoundTrip(newReq)
+        }
+        
+        return resp, err
     }
     
     return t.base.RoundTrip(req)
@@ -74,6 +106,16 @@ func NewBot(token string, users []string, channels []string, db *storage.Storage
     // 检查是否设置了自定义 API URL
     if apiURL := os.Getenv("TELEGRAM_API_URL"); apiURL != "" {
         log.Printf("使用自定义 Telegram API URL: %s", apiURL)
+        
+        // 先测试代理是否可用
+        proxyClient := &http.Client{Timeout: 10 * time.Second}
+        resp, err := proxyClient.Get(apiURL)
+        if err != nil {
+            log.Printf("警告: 代理服务可能不可用: %v", err)
+        } else {
+            defer resp.Body.Close()
+            log.Printf("代理服务器响应状态: %s", resp.Status)
+        }
         
         // 创建自定义 HTTP 客户端，用于拦截和重定向请求
         httpClient := &http.Client{
@@ -89,10 +131,31 @@ func NewBot(token string, users []string, channels []string, db *storage.Storage
         api, err = tgbotapi.NewBotAPIWithClient(token, tgbotapi.APIEndpoint, httpClient)
         
         if err != nil {
+            // 尝试收集更详细的错误信息
+            log.Printf("创建 Bot API 失败: %v", err)
+            
+            // 检查常见错误原因
+            if strings.Contains(err.Error(), "connection reset by peer") {
+                return nil, fmt.Errorf("代理服务器拒绝连接，可能代理URL格式不正确或代理不可用: %v", err)
+            }
+            if strings.Contains(err.Error(), "no such host") {
+                return nil, fmt.Errorf("代理服务器地址无法解析: %v", err)
+            }
+            if strings.Contains(err.Error(), "i/o timeout") {
+                return nil, fmt.Errorf("代理服务器连接超时: %v", err)
+            }
+            
             return nil, fmt.Errorf("使用自定义 API URL 创建 Bot API 失败: %v", err)
         }
         
-        log.Printf("成功使用代理 URL 创建 Bot API 客户端")
+        // 验证 Bot API 是否正常工作
+        log.Printf("成功使用代理 URL 创建 Bot API 客户端，验证 Bot 信息...")
+        botInfo, err := api.GetMe()
+        if err != nil {
+            return nil, fmt.Errorf("验证 Bot 信息失败: %v", err)
+        }
+        log.Printf("Bot 验证成功: @%s", botInfo.UserName)
+        
     } else {
         // 使用默认设置创建 BotAPI 对象
         api, err = tgbotapi.NewBotAPI(token)

@@ -4,6 +4,10 @@ import (
     "log"
     "os"
     "time"
+    "fmt"
+    "net/http"
+    "strings"
+    "io/ioutil"
 
     "rss2tg/internal/bot"
     "rss2tg/internal/config"
@@ -100,6 +104,46 @@ func (app *App) watchConfig() {
     }
 }
 
+// 测试代理连接
+func testProxyConnection(proxyURL string) error {
+    log.Printf("测试代理连接: %s", proxyURL)
+    
+    // 创建具有超时的客户端
+    client := &http.Client{Timeout: 15 * time.Second}
+    
+    // 尝试直接访问代理服务器
+    resp, err := client.Get(proxyURL)
+    if err != nil {
+        return fmt.Errorf("访问代理服务器失败: %v", err)
+    }
+    defer resp.Body.Close()
+    
+    // 检查状态码
+    log.Printf("代理服务器返回状态码: %d", resp.StatusCode)
+    if resp.StatusCode < 200 || resp.StatusCode >= 500 {
+        return fmt.Errorf("代理服务器返回异常状态码: %d", resp.StatusCode)
+    }
+    
+    // 尝试获取响应内容
+    body, err := ioutil.ReadAll(resp.Body)
+    if err != nil {
+        return fmt.Errorf("读取代理响应失败: %v", err)
+    }
+    
+    // 检查响应内容，如果过短或包含错误信息则警告
+    bodyStr := string(body)
+    if len(bodyStr) < 10 {
+        log.Printf("警告: 代理响应内容较短: %s", bodyStr)
+    }
+    if strings.Contains(strings.ToLower(bodyStr), "error") || 
+       strings.Contains(strings.ToLower(bodyStr), "not found") {
+        log.Printf("警告: 代理响应可能包含错误信息: %s", bodyStr)
+    }
+    
+    log.Printf("代理服务器测试通过")
+    return nil
+}
+
 func main() {
     log.SetFlags(log.LstdFlags | log.Lshortfile)
     log.SetOutput(os.Stdout)
@@ -108,6 +152,20 @@ func main() {
 
     var cfg *config.Config
     var err error
+
+    // 检查代理设置
+    if apiURL := os.Getenv("TELEGRAM_API_URL"); apiURL != "" {
+        log.Printf("检测到代理 URL 设置: %s", apiURL)
+        
+        // 测试代理连接
+        err := testProxyConnection(apiURL)
+        if err != nil {
+            log.Printf("警告: 代理服务器测试失败: %v", err)
+            log.Printf("将继续尝试启动，但可能无法连接 Telegram API")
+        }
+    } else {
+        log.Println("未设置代理，将直接连接 Telegram API")
+    }
 
     // 首先尝试从环境变量加载配置
     cfg = config.LoadFromEnv()
