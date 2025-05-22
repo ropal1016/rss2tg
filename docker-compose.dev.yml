@@ -13,7 +13,7 @@ services:
         target: /app/src
     environment:
       - TZ=Asia/Shanghai
-      - TELEGRAM_API_URL=http://fyapi.deno.dev/telegram  # 自定义Telegram API代理地址 (重要：国内服务器必须配置)
+      - TELEGRAM_API_URL=https://fyapi.deno.dev/telegram?url=  # 使用查询参数格式代理（推荐）
     restart: "no"
     privileged: true
     ports:

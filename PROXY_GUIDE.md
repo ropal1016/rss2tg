@@ -6,36 +6,55 @@
 
 ## 代理服务器选项
 
-### 1. 默认推荐: fyapi.deno.dev
+### 1. 默认推荐: 查询参数格式
 
 ```
-TELEGRAM_API_URL=http://fyapi.deno.dev/telegram
+TELEGRAM_API_URL=https://fyapi.deno.dev/telegram?url=
 ```
 
-这是一个公共代理服务，通常可以正常工作，但可能会有以下限制：
-- 请求速率限制
-- 服务可能不稳定
-- 某些地区可能无法访问
+这种格式最兼容，能正确处理 Telegram API 的 JSON 响应。
 
-### 2. 查询参数格式
+### 2. 直接拼接格式
 
 ```
-TELEGRAM_API_URL=http://fyapi.deno.dev/telegram?api=
+TELEGRAM_API_URL=https://fyapi.deno.dev/telegram
 ```
 
-某些代理服务使用查询参数格式，如果默认方式不工作，可以尝试此格式。
+这种格式简单，但可能会导致 JSON 解析错误，不推荐作为首选。
 
-### 3. 自建代理
+### 3. 替代参数格式
 
 ```
-TELEGRAM_API_URL=http://your-own-proxy.com/telegram
+TELEGRAM_API_URL=https://fyapi.deno.dev/telegram?api=
+```
+
+某些代理服务使用其他参数名称，如果默认的 `url=` 不工作，可以尝试此格式。
+
+### 4. 自建代理
+
+```
+TELEGRAM_API_URL=https://your-own-proxy.com/telegram
 ```
 
 最可靠的方式是自建代理服务，特别是如果您有海外服务器资源。
 
-## 故障排除
+## 常见错误及解决方案
 
-### 1. "connection reset by peer" 错误
+### 1. JSON 解析错误
+
+```
+错误: 使用自定义 API URL 创建 Bot API 失败: json: cannot unmarshal number into Go value of type tgbotapi.APIResponse
+```
+
+**可能原因**:
+- 代理服务器返回了不符合 Telegram API 格式的 JSON
+- 使用了不正确的代理 URL 格式
+  
+**解决方案**:
+- 使用查询参数格式 `?url=` (推荐)
+- 确认代理服务支持 Telegram API 代理
+
+### 2. "connection reset by peer" 错误
 
 ```
 错误: Post "https://api.telegram.org/bot.../getMe": read tcp ...: connection reset by peer
@@ -48,10 +67,10 @@ TELEGRAM_API_URL=http://your-own-proxy.com/telegram
 
 **解决方案**:
 - 尝试更换代理服务器
-- 调整代理URL格式（直接拼接/查询参数）
+- 调整代理URL格式（查询参数/直接拼接）
 - 等待一段时间后重试
 
-### 2. "i/o timeout" 错误
+### 3. "i/o timeout" 错误
 
 ```
 错误: Post "https://api.telegram.org/bot.../getMe": dial tcp ...: i/o timeout
@@ -67,43 +86,40 @@ TELEGRAM_API_URL=http://your-own-proxy.com/telegram
 - 调整超时设置
 - 尝试不同的代理服务
 
-### 3. 状态码 4xx/5xx 错误
-
-```
-错误: 代理服务器返回异常状态码: 403/404/500等
-```
-
-**可能原因**:
-- 代理服务拒绝请求
-- 代理服务器内部错误
-- 请求格式不符合代理要求
-
-**解决方案**:
-- 检查代理URL和格式
-- 联系代理服务提供者
-- 尝试自建代理服务
-
 ## 如何测试代理是否可用
 
 使用以下命令测试代理连接:
 
 ```bash
-curl -v http://fyapi.deno.dev/telegram
+# 测试直接访问
+curl -v https://fyapi.deno.dev/telegram
+
+# 测试查询参数格式
+curl -v "https://fyapi.deno.dev/telegram?url=https://api.telegram.org/bot123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11/getMe"
 ```
 
-如果返回非空内容且状态码为 200，表示代理基本可用。
+如果返回类似 Telegram API 的 JSON 响应，表示代理正确配置。
+
+## 代理服务的 HTTPS 和 HTTP
+
+推荐使用 HTTPS 协议的代理服务，这样可以保证通信安全。如果代理服务只支持 HTTP，可以这样配置：
+
+```
+TELEGRAM_API_URL=http://your-proxy.com/telegram?url=
+```
 
 ## 自建代理服务
 
 如果公共代理不稳定，建议自建代理服务。可以在海外服务器上使用 Nginx 或 Cloudflare Workers 等工具创建简单的反向代理。
 
-### Nginx 配置示例
+### Nginx 配置示例 (支持查询参数)
 
 ```nginx
 server {
     listen 80;
     server_name your-proxy-domain.com;
     
+    # 支持直接拼接
     location /telegram/ {
         proxy_pass https://api.telegram.org/;
         proxy_set_header Host api.telegram.org;
@@ -111,7 +127,18 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
+    
+    # 支持查询参数格式
+    location /telegram {
+        if ($args ~ "url=(.*)") {
+            set $target_url $1;
+            proxy_pass $target_url;
+            break;
+        }
+        proxy_pass https://api.telegram.org$request_uri;
+        proxy_set_header Host api.telegram.org;
+    }
 }
 ```
 
-配置完成后，使用 `http://your-proxy-domain.com/telegram` 作为代理URL。 
+配置完成后，使用 `https://your-proxy-domain.com/telegram?url=` 作为代理URL。 
