@@ -39,7 +39,7 @@ type customTransport struct {
     originalURL string
     proxyURL    string
     base        http.RoundTripper
-    requestMode int  // 请求模式: 0=默认(直接拼接), 1=查询参数, 2=路径移除bot前缀
+    requestMode int  // 请求模式: 0=默认(直接拼接), 1=查询参数, 2=路径移除bot前缀, 3=完全使用代理URL不修改路径
 }
 
 func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -68,6 +68,10 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
                 apiPath = strings.Replace(apiPath, "/bot", "/", 1)
             }
             newURLStr = proxyBase + apiPath
+        case 3: // 完全使用代理URL不修改路径
+            // 这种模式下，我们直接使用代理URL，只替换域名部分
+            // 示例: https://api.telegram.org/bot123/getMe => https://tg.ll.sd/bot123/getMe
+            newURLStr = proxyBase + apiPath
         default: // 默认: 直接拼接
             // 示例: http://proxy/bot123/getMe
             newURLStr = proxyBase + apiPath
@@ -83,22 +87,36 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
         *newReq = *req
         newReq.URL = newURL
         
-        // 添加可能需要的额外头信息
+        // 添加浏览器模拟请求头
+        newReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        newReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+        newReq.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7")
+        newReq.Header.Set("Connection", "keep-alive")
         newReq.Header.Set("X-Original-URL", originalURLStr)
         newReq.Header.Set("X-Proxy-Agent", "RSS2TG/1.0")
         
         log.Printf("代理请求: %s -> %s (模式: %d)", req.URL, newReq.URL, t.requestMode)
+        log.Printf("请求头: %v", newReq.Header)
         
-        resp, err := t.base.RoundTrip(newReq)
         // 输出更详细的错误信息
+        resp, err := t.base.RoundTrip(newReq)
         if err != nil {
             log.Printf("代理请求失败: %v, URL: %s", err, newReq.URL)
+            return nil, err
         } else if resp.StatusCode >= 400 {
             log.Printf("代理返回错误状态码: %d %s", resp.StatusCode, resp.Status)
             body, _ := ioutil.ReadAll(resp.Body)
             // 重新创建一个新的body供后续读取
             resp.Body = ioutil.NopCloser(bytes.NewBuffer(body))
             log.Printf("代理返回内容: %s", string(body))
+            
+            // 如果是404错误且模式为0，尝试提供更详细的错误诊断
+            if resp.StatusCode == 404 && t.requestMode == 0 {
+                log.Printf("建议尝试其他请求模式，如TELEGRAM_API_MODE=3或2")
+            }
+        } else {
+            // 输出成功响应的简要信息
+            log.Printf("代理请求成功: %d %s", resp.StatusCode, resp.Status)
         }
         
         return resp, err
@@ -118,7 +136,7 @@ func NewBot(token string, users []string, channels []string, db *storage.Storage
         // 确定请求模式
         requestMode := 0 // 默认为直接拼接模式
         if modeStr := os.Getenv("TELEGRAM_API_MODE"); modeStr != "" {
-            if mode, err := strconv.Atoi(modeStr); err == nil && mode >= 0 && mode <= 2 {
+            if mode, err := strconv.Atoi(modeStr); err == nil && mode >= 0 && mode <= 3 {
                 requestMode = mode
                 log.Printf("使用请求模式: %d", requestMode)
             } else {
@@ -172,7 +190,7 @@ func NewBot(token string, users []string, channels []string, db *storage.Storage
         log.Printf("成功使用代理 URL 创建 Bot API 客户端，验证 Bot 信息...")
         botInfo, err := api.GetMe()
         if err != nil {
-            return nil, fmt.Errorf("验证 Bot 信息失败: %v\n请尝试设置 TELEGRAM_API_MODE 环境变量为不同值(0/1/2)", err)
+            return nil, fmt.Errorf("验证 Bot 信息失败: %v\n请尝试设置 TELEGRAM_API_MODE 环境变量为不同值(0/1/2/3)", err)
         }
         log.Printf("Bot 验证成功: @%s", botInfo.UserName)
         

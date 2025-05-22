@@ -8,13 +8,14 @@
 
 ### 请求模式说明
 
-本项目支持三种请求模式，通过环境变量 `TELEGRAM_API_MODE` 设置：
+本项目支持四种请求模式，通过环境变量 `TELEGRAM_API_MODE` 设置：
 
 | 模式值 | 说明 | 例子 |
 |-------|------|------|
 | 0 | 直接拼接模式（默认） | `https://tg.ll.sd/bot123456/getMe` |
 | 1 | 查询参数模式 | `https://tg.ll.sd?url=https://api.telegram.org/bot123456/getMe` |
 | 2 | 移除bot前缀模式 | `https://tg.ll.sd/123456/getMe` |
+| 3 | 完全使用代理URL模式 | `https://tg.ll.sd/bot123456/getMe` (与模式0类似，但添加浏览器模拟头) |
 
 ### 1. 默认推荐: fyapi.deno.dev (模式0)
 
@@ -46,7 +47,16 @@ TELEGRAM_API_MODE=2
 
 一些代理服务使用的URL格式是移除了原始URL中的`/bot`前缀，如果前两种模式不工作，可以尝试此格式。
 
-### 4. 自建代理
+### 4. 完全使用代理URL模式 (模式3，推荐用于tg.ll.sd)
+
+```
+TELEGRAM_API_URL=https://tg.ll.sd
+TELEGRAM_API_MODE=3
+```
+
+此模式类似于模式0，但会添加浏览器模拟请求头，以解决某些代理服务需要浏览器User-Agent的问题。特别适合tg.ll.sd这类需要特定请求头的代理服务。
+
+### 5. 自建代理
 
 ```
 TELEGRAM_API_URL=http://your-own-proxy.com/telegram
@@ -69,7 +79,7 @@ TELEGRAM_API_MODE=0  # 根据您的代理实现选择适当的模式
 - 代理服务器暂时不可用
 
 **解决方案**:
-- 尝试更换不同的请求模式 (TELEGRAM_API_MODE=0/1/2)
+- 尝试更换不同的请求模式 (TELEGRAM_API_MODE=0/1/2/3)
 - 调整代理URL格式
 - 等待一段时间后重试
 - 尝试其他代理服务
@@ -100,21 +110,24 @@ TELEGRAM_API_MODE=0  # 根据您的代理实现选择适当的模式
 - 代理服务拒绝请求
 - 代理服务器内部错误
 - 请求格式不符合代理要求
+- 缺少所需的请求头信息
 
 **解决方案**:
 - 检查代理URL和格式
-- 尝试不同的请求模式
+- 尝试不同的请求模式，特别是模式3（带浏览器模拟头）
 - 联系代理服务提供者
 - 尝试自建代理服务
 
 ## 各类代理服务器配置示例
 
-### 1. tg.ll.sd
+### 1. tg.ll.sd (推荐配置)
 
 ```
 TELEGRAM_API_URL=https://tg.ll.sd
-TELEGRAM_API_MODE=2
+TELEGRAM_API_MODE=3  # 使用完全代理模式并添加浏览器模拟头
 ```
+
+tg.ll.sd是一个稳定的代理服务，但它需要浏览器模拟请求头才能正常工作，因此推荐使用模式3。
 
 ### 2. fyapi.deno.dev
 
@@ -138,8 +151,8 @@ TELEGRAM_API_MODE=1
 # 测试直接访问
 curl -v https://your-proxy-url
 
-# 测试模式0格式
-curl -v https://your-proxy-url/botTESTTOKEN/getMe
+# 测试模式0或模式3格式
+curl -v -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" https://your-proxy-url/botTESTTOKEN/getMe
 
 # 测试模式1格式 
 curl -v "https://your-proxy-url?url=https://api.telegram.org/botTESTTOKEN/getMe"
@@ -148,7 +161,7 @@ curl -v "https://your-proxy-url?url=https://api.telegram.org/botTESTTOKEN/getMe"
 curl -v https://your-proxy-url/TESTTOKEN/getMe
 ```
 
-如果返回非空内容且状态码为 200，表示代理基本可用。
+如果返回非空内容且状态码为 200，表示代理基本可用。注意，对于tg.ll.sd，使用-A参数设置User-Agent可能是必要的。
 
 ## 自建代理服务
 
@@ -197,4 +210,16 @@ async function handleRequest(request) {
 }
 ```
 
-配置完成后，根据您的实现选择适当的模式和URL格式。 
+配置完成后，根据您的实现选择适当的模式和URL格式。
+
+## 已知问题和特殊情况
+
+### tg.ll.sd 的特殊要求
+
+tg.ll.sd 代理服务器在处理请求时有特殊要求：
+
+1. 需要浏览器标准的User-Agent请求头
+2. 接受标准的 /bot{token}/method 格式URL
+3. 直接在浏览器访问时工作正常，但程序请求可能需要模拟浏览器头信息
+
+如果您使用 tg.ll.sd，强烈建议使用模式3 (TELEGRAM_API_MODE=3)，这种模式会自动添加所需的浏览器模拟头。 

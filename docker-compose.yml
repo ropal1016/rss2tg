@@ -13,13 +13,20 @@ services:
       # 设置以下代理地址之一（根据实际可用情况选择）
       # 方式1：使用 fyapi.deno.dev 代理（默认推荐）
       - TELEGRAM_API_URL=http://fyapi.deno.dev/telegram
-      # 设置代理请求模式 (0=默认/直接拼接, 1=查询参数, 2=移除bot前缀)
+      # 设置代理请求模式 (0=默认/直接拼接, 1=查询参数, 2=移除bot前缀, 3=完全使用代理URL)
       - TELEGRAM_API_MODE=0
+      
       # 方式2：使用查询参数格式的代理（如果方式1不工作，同时设置 TELEGRAM_API_MODE=1）
       #- TELEGRAM_API_URL=http://fyapi.deno.dev/telegram
       #- TELEGRAM_API_MODE=1
+      
       # 方式3：使用移除bot前缀的格式（如果前两种不工作，同时设置 TELEGRAM_API_MODE=2）
       #- TELEGRAM_API_URL=http://your-own-proxy.com/telegram
       #- TELEGRAM_API_MODE=2
+      
+      # 方式4：使用tg.ll.sd代理服务（推荐结合模式3使用）
+      #- TELEGRAM_API_URL=https://tg.ll.sd
+      #- TELEGRAM_API_MODE=3
+      
       - TZ=Asia/Shanghai     # 时区设置
     restart: unless-stopped
