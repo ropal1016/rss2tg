@@ -10,6 +10,6 @@ services:
       - TELEGRAM_BOT_TOKEN=  # 你的Telegram Bot Token
       - TELEGRAM_USERS=      # 接收消息的用户ID，多个用逗号分隔
       - TELEGRAM_CHANNELS=   # 接收消息的频道，多个用逗号分隔
-      - TELEGRAM_API_URL=http://xxx.deno.dev/telegram  # 自定义Telegram API地址 (国内服务器无法直接访问api.telegram.org时使用)
+      - TELEGRAM_API_URL=http://fyapi.deno.dev/telegram  # 自定义Telegram API代理地址 (重要：国内服务器必须配置，否则无法连接Telegram)
       - TZ=Asia/Shanghai     # 时区设置
     restart: unless-stopped

@@ -39,5 +39,8 @@ RUN apk add --no-cache ca-certificates tzdata
 # 设置时区
 ENV TZ=Asia/Shanghai
 
+# 设置默认的代理环境变量（可被覆盖）
+ENV TELEGRAM_API_URL=
+
 ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["/app/bot"]

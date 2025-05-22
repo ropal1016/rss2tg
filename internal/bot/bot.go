@@ -5,6 +5,7 @@ import (
     "io"
     "log"
     "net/http"
+    "net/url"
     "os"
     "strconv"
     "strings"
@@ -31,16 +32,73 @@ type Bot struct {
     updateRSSHandler func()
 }
 
-func NewBot(token string, users []string, channels []string, db *storage.Storage, config *config.Config, configFile string, stats *stats.Stats) (*Bot, error) {
-    api, err := tgbotapi.NewBotAPI(token)
-    if err != nil {
-        return nil, err
+// 自定义传输层，用于拦截和重定向 Telegram API 请求
+type customTransport struct {
+    originalURL string
+    proxyURL    string
+    base        http.RoundTripper
+}
+
+func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+    if strings.Contains(req.URL.String(), t.originalURL) {
+        // 替换请求 URL 中的 API 域名
+        newURLStr := strings.Replace(
+            req.URL.String(), 
+            t.originalURL, 
+            t.proxyURL, 
+            1,
+        )
+        
+        newURL, err := url.Parse(newURLStr)
+        if err != nil {
+            return nil, err
+        }
+        
+        // 创建新的请求对象
+        newReq := new(http.Request)
+        *newReq = *req
+        newReq.URL = newURL
+        
+        log.Printf("代理请求: %s -> %s", req.URL, newReq.URL)
+        
+        return t.base.RoundTrip(newReq)
     }
     
-    // Check if custom API URL is set
+    return t.base.RoundTrip(req)
+}
+
+func NewBot(token string, users []string, channels []string, db *storage.Storage, config *config.Config, configFile string, stats *stats.Stats) (*Bot, error) {
+    var api *tgbotapi.BotAPI
+    var err error
+    
+    // 检查是否设置了自定义 API URL
     if apiURL := os.Getenv("TELEGRAM_API_URL"); apiURL != "" {
         log.Printf("使用自定义 Telegram API URL: %s", apiURL)
-        api.SetAPIEndpoint(apiURL)
+        
+        // 创建自定义 HTTP 客户端，用于拦截和重定向请求
+        httpClient := &http.Client{
+            Transport: &customTransport{
+                originalURL: "https://api.telegram.org",
+                proxyURL:    apiURL,
+                base:        http.DefaultTransport,
+            },
+            Timeout: 60 * time.Second,
+        }
+        
+        // 使用自定义 HTTP 客户端创建 BotAPI 对象
+        api, err = tgbotapi.NewBotAPIWithClient(token, tgbotapi.APIEndpoint, httpClient)
+        
+        if err != nil {
+            return nil, fmt.Errorf("使用自定义 API URL 创建 Bot API 失败: %v", err)
+        }
+        
+        log.Printf("成功使用代理 URL 创建 Bot API 客户端")
+    } else {
+        // 使用默认设置创建 BotAPI 对象
+        api, err = tgbotapi.NewBotAPI(token)
+        if err != nil {
+            return nil, err
+        }
     }
 
     userIDs := make([]int64, len(users))
