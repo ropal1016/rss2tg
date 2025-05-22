@@ -1,8 +1,10 @@
 package bot
 
 import (
+    "bytes"
     "fmt"
     "io"
+    "io/ioutil"
     "log"
     "net/http"
     "net/url"
@@ -37,6 +39,7 @@ type customTransport struct {
     originalURL string
     proxyURL    string
     base        http.RoundTripper
+    requestMode int  // 请求模式: 0=默认(直接拼接), 1=查询参数, 2=路径移除bot前缀
 }
 
 func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -53,30 +56,26 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
         // 构建相对路径
         apiPath := strings.TrimPrefix(originalURLStr, t.originalURL)
         
-        // 根据错误信息分析，我们需要优先使用查询参数格式
-        // 格式1：查询参数传递 - http://proxy?url=originalURL (优先使用)
-        if strings.Contains(t.proxyURL, "?") {
-            // 如果代理 URL 已经包含查询参数，使用 & 连接
-            newURLStr = proxyBase + "&url=" + url.QueryEscape(originalURLStr)
-        } else {
+        // 根据不同的请求模式构建URL
+        switch t.requestMode {
+        case 1: // 查询参数格式
+            // 示例: http://proxy?url=https://api.telegram.org/bot123/getMe
             newURLStr = proxyBase + "?url=" + url.QueryEscape(originalURLStr)
+        case 2: // 路径移除bot前缀
+            // 从apiPath中移除'/bot'前缀，有些代理期望这种格式
+            // 示例: https://api.telegram.org/bot123/getMe => http://proxy/123/getMe
+            if strings.HasPrefix(apiPath, "/bot") {
+                apiPath = strings.Replace(apiPath, "/bot", "/", 1)
+            }
+            newURLStr = proxyBase + apiPath
+        default: // 默认: 直接拼接
+            // 示例: http://proxy/bot123/getMe
+            newURLStr = proxyBase + apiPath
         }
-        
-        // 格式2：直接拼接 - http://proxy/relative/path (备用方案)
-        directProxyURL := proxyBase + apiPath
-        
-        // 首先尝试查询参数格式
-        log.Printf("使用查询参数格式: %s", newURLStr)
         
         newURL, err := url.Parse(newURLStr)
         if err != nil {
-            log.Printf("解析代理URL失败: %v，尝试直接拼接格式", err)
-            // 如果解析失败，尝试直接拼接格式
-            newURLStr = directProxyURL
-            newURL, err = url.Parse(newURLStr)
-            if err != nil {
-                return nil, err
-            }
+            return nil, err
         }
         
         // 创建新的请求对象
@@ -88,26 +87,18 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
         newReq.Header.Set("X-Original-URL", originalURLStr)
         newReq.Header.Set("X-Proxy-Agent", "RSS2TG/1.0")
         
-        log.Printf("代理请求: %s -> %s", req.URL, newReq.URL)
+        log.Printf("代理请求: %s -> %s (模式: %d)", req.URL, newReq.URL, t.requestMode)
         
-        // 发送请求
         resp, err := t.base.RoundTrip(newReq)
-        
-        // 如果查询参数格式失败，尝试直接拼接格式
-        if err != nil || (resp != nil && resp.StatusCode >= 400) {
-            log.Printf("查询参数格式请求失败: %v, 状态码: %v，尝试直接拼接格式", 
-                      err, resp != nil && resp.StatusCode)
-            
-            // 尝试直接拼接格式
-            newURL, _ := url.Parse(directProxyURL)
-            newReq.URL = newURL
-            log.Printf("改用直接拼接格式: %s", newReq.URL)
-            return t.base.RoundTrip(newReq)
-        }
-        
-        // 如果成功，但检查是否包含特定的JSON解析错误
-        if err != nil && strings.Contains(err.Error(), "json") {
-            log.Printf("警告：收到非标准JSON响应，可能需要调整代理URL格式")
+        // 输出更详细的错误信息
+        if err != nil {
+            log.Printf("代理请求失败: %v, URL: %s", err, newReq.URL)
+        } else if resp.StatusCode >= 400 {
+            log.Printf("代理返回错误状态码: %d %s", resp.StatusCode, resp.Status)
+            body, _ := ioutil.ReadAll(resp.Body)
+            // 重新创建一个新的body供后续读取
+            resp.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+            log.Printf("代理返回内容: %s", string(body))
         }
         
         return resp, err
@@ -124,10 +115,15 @@ func NewBot(token string, users []string, channels []string, db *storage.Storage
     if apiURL := os.Getenv("TELEGRAM_API_URL"); apiURL != "" {
         log.Printf("使用自定义 Telegram API URL: %s", apiURL)
         
-        // 判断是否使用推荐的查询参数格式
-        if !strings.Contains(apiURL, "?") {
-            log.Printf("警告: 未使用查询参数格式的代理URL，可能导致JSON解析错误")
-            log.Printf("推荐格式: %s?url=", apiURL)
+        // 确定请求模式
+        requestMode := 0 // 默认为直接拼接模式
+        if modeStr := os.Getenv("TELEGRAM_API_MODE"); modeStr != "" {
+            if mode, err := strconv.Atoi(modeStr); err == nil && mode >= 0 && mode <= 2 {
+                requestMode = mode
+                log.Printf("使用请求模式: %d", requestMode)
+            } else {
+                log.Printf("警告: 无效的请求模式 '%s'，使用默认模式 0", modeStr)
+            }
         }
         
         // 先测试代理是否可用
@@ -138,13 +134,6 @@ func NewBot(token string, users []string, channels []string, db *storage.Storage
         } else {
             defer resp.Body.Close()
             log.Printf("代理服务器响应状态: %s", resp.Status)
-            
-            // 尝试读取代理响应内容的前100个字符，帮助调试
-            body := make([]byte, 100)
-            n, _ := resp.Body.Read(body)
-            if n > 0 {
-                log.Printf("代理服务器响应内容示例: %s", string(body[:n]))
-            }
         }
         
         // 创建自定义 HTTP 客户端，用于拦截和重定向请求
@@ -153,6 +142,7 @@ func NewBot(token string, users []string, channels []string, db *storage.Storage
                 originalURL: "https://api.telegram.org",
                 proxyURL:    apiURL,
                 base:        http.DefaultTransport,
+                requestMode: requestMode,
             },
             Timeout: 60 * time.Second,
         }
@@ -166,16 +156,13 @@ func NewBot(token string, users []string, channels []string, db *storage.Storage
             
             // 检查常见错误原因
             if strings.Contains(err.Error(), "connection reset by peer") {
-                return nil, fmt.Errorf("代理服务器拒绝连接，可能代理URL格式不正确或代理不可用: %v\n请尝试使用查询参数格式，如 %s?url=", err, apiURL)
+                return nil, fmt.Errorf("代理服务器拒绝连接，可能代理URL格式不正确或代理不可用: %v\n请尝试设置 TELEGRAM_API_MODE 环境变量为 1 或 2", err)
             }
             if strings.Contains(err.Error(), "no such host") {
                 return nil, fmt.Errorf("代理服务器地址无法解析: %v", err)
             }
             if strings.Contains(err.Error(), "i/o timeout") {
                 return nil, fmt.Errorf("代理服务器连接超时: %v", err)
-            }
-            if strings.Contains(err.Error(), "json") || strings.Contains(err.Error(), "unmarshal") {
-                return nil, fmt.Errorf("JSON解析错误，代理返回的格式与Telegram API不兼容: %v\n请使用查询参数格式，将URL改为 %s?url=", err, apiURL)
             }
             
             return nil, fmt.Errorf("使用自定义 API URL 创建 Bot API 失败: %v", err)
@@ -185,10 +172,7 @@ func NewBot(token string, users []string, channels []string, db *storage.Storage
         log.Printf("成功使用代理 URL 创建 Bot API 客户端，验证 Bot 信息...")
         botInfo, err := api.GetMe()
         if err != nil {
-            if strings.Contains(err.Error(), "json") {
-                return nil, fmt.Errorf("验证Bot信息时出现JSON解析错误，请使用查询参数格式，将URL改为 %s?url=", apiURL)
-            }
-            return nil, fmt.Errorf("验证 Bot 信息失败: %v", err)
+            return nil, fmt.Errorf("验证 Bot 信息失败: %v\n请尝试设置 TELEGRAM_API_MODE 环境变量为不同值(0/1/2)", err)
         }
         log.Printf("Bot 验证成功: @%s", botInfo.UserName)
         
